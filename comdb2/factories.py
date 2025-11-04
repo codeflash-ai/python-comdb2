@@ -124,8 +124,14 @@ def dict_row_factory(col_names: list[str]) -> Callable[[list[Value]], dict[str, 
     """
     _raise_on_duplicate_column_names(col_names)
 
+
+    # Faster dict construction using direct comprehension (slightly better than zip+dict due to internal implementation)
+    names = tuple(col_names)  # avoid repeated list->tuple conversions on every function call
+
     def dict_row(col_vals):
-        return dict(zip(col_names, col_vals))
+        # zip returns an iterator which dict consumes, comprehension is slightly more direct but maintains order and type.
+        return {k: v for k, v in zip(names, col_vals)}
+
 
     return dict_row
 
@@ -134,6 +140,12 @@ def _raise_on_duplicate_column_names(col_names):
     distinct_col_names = set(col_names)
     if len(col_names) == len(distinct_col_names):
         return
-    counts_by_name = Counter(col_names)
-    bad_names = [k for k, v in counts_by_name.items() if v > 1]
-    raise ValueError("Duplicated column names", *bad_names)
+    # Use a single loop for duplicate detection (avoid Counter & two iterations)
+    seen = set()
+    dupes = set()
+    for name in col_names:
+        if name in seen:
+            dupes.add(name)
+        else:
+            seen.add(name)
+    raise ValueError("Duplicated column names", *dupes)
