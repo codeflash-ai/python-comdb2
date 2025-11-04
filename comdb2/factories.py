@@ -25,7 +25,6 @@ a callable that will be called once per row with a list of column values.
 from __future__ import annotations
 
 from collections import namedtuple
-from collections import Counter
 from .cdb2 import Value
 from collections.abc import Callable
 from typing import NamedTuple
@@ -80,15 +79,21 @@ def namedtuple_row_factory(col_names: list[str]) -> Callable[[list[Value]], Name
     # Ensure DML doesn't raise an exception for an invalid column name
     if len(col_names) == 1:
         if col_names[0] in ("rows inserted", "rows updated", "rows deleted"):
-            return namedtuple("Row", col_names, rename=True)._make
+            # Cache the result of namedtuple for single DML case by using a static class
+            # This is a minor improvement, but avoids namedtuple instantiation repetition
+            return _get_single_dml_namedtuple_maker(col_names[0])
 
-    try:
-        return namedtuple("Row", col_names)._make
-    except ValueError:
+    # Pre-check for duplicate column names before calling namedtuple (which is expensive), and raise if found
+    # This block is faster than failing inside namedtuple's exception/retry path, and avoids constructing
+    # an unnecessary class just to throw
+    if len(col_names) != len(set(col_names)):
         # If the error was caused by duplicated column names, raise a more
         # preceise error message.  Otherwise, re-raise.
         _raise_on_duplicate_column_names(col_names)
-        raise
+        # Will raise, so no further code runs
+
+    # If we reached here, there are no duplicate names, and we can construct namedtuple normally
+    return namedtuple("Row", col_names)._make
 
 
 def dict_row_factory(col_names: list[str]) -> Callable[[list[Value]], dict[str, Value]]:
@@ -134,6 +139,23 @@ def _raise_on_duplicate_column_names(col_names):
     distinct_col_names = set(col_names)
     if len(col_names) == len(distinct_col_names):
         return
-    counts_by_name = Counter(col_names)
-    bad_names = [k for k, v in counts_by_name.items() if v > 1]
+    # The main bottleneck in the profile was Counter and bad_names list comp.
+    # We can get duplicate names more efficiently by iterating once and recording those with count > 1.
+    counts = {}
+    # This loop is faster than Counter for moderate input sizes, and no need for Counter object bloat
+    for name in col_names:
+        counts[name] = counts.get(name, 0) + 1
+    bad_names = [name for name, count in counts.items() if count > 1]
     raise ValueError("Duplicated column names", *bad_names)
+
+def _get_single_dml_namedtuple_maker(col_name: str):
+    # Static cache, keyed by column name (should only ever be three values)
+    # This avoids multiple constructions of identical namedtuple classes.
+    # Thread-safe in CPython due to GIL and single-threaded usage
+    if not hasattr(_get_single_dml_namedtuple_maker, "_cache"):
+        _get_single_dml_namedtuple_maker._cache = {}
+    cache = _get_single_dml_namedtuple_maker._cache
+    if col_name not in cache:
+        # Always use rename=True here, as original code intended
+        cache[col_name] = namedtuple("Row", [col_name], rename=True)._make
+    return cache[col_name]
