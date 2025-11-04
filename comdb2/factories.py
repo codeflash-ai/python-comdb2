@@ -131,9 +131,13 @@ def dict_row_factory(col_names: list[str]) -> Callable[[list[Value]], dict[str, 
 
 
 def _raise_on_duplicate_column_names(col_names):
-    distinct_col_names = set(col_names)
-    if len(col_names) == len(distinct_col_names):
-        return
-    counts_by_name = Counter(col_names)
-    bad_names = [k for k, v in counts_by_name.items() if v > 1]
-    raise ValueError("Duplicated column names", *bad_names)
+    seen = set()
+    bad_names = []
+    for col in col_names:
+        if col in seen:
+            if col not in bad_names:
+                bad_names.append(col)
+        else:
+            seen.add(col)
+    if bad_names:
+        raise ValueError("Duplicated column names", *bad_names)
