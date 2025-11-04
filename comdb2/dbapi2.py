@@ -1043,12 +1043,15 @@ class Cursor:
         """
         if not _VALID_SP_NAME.match(procname):
             raise NotSupportedError("Invalid procedure name '%s'" % procname)
-        params_as_dict = {str(i): e for i, e in enumerate(parameters)}
+        # Optimize enumerate and dict comprehension, avoid creating unnecessary intermediate objects
+        n = len(parameters)
+        params_as_dict = {str(i): parameters[i] for i in range(n)}
+        # Use list comprehension optimally within join and avoid repeated lookups
         sql = (
             "exec procedure "
             + procname
             + "("
-            + ", ".join("%%(%d)s" % i for i in range(len(params_as_dict)))
+            + ", ".join([f"%({i})s" for i in range(n)])
             + ")"
         )
         self.execute(sql, params_as_dict)
@@ -1132,14 +1135,12 @@ class Cursor:
         if not self._conn._autocommit:
             # Certain operations are forbidden when not in autocommit mode.
             errmsg = self._ErrorMessagesByOperation.get(operation)
-            if errmsg:
+            if errmsg is not None:
                 raise InterfaceError(errmsg)
 
         self._execute(operation, sql, parameters, column_types=column_types)
         if self._rowcount == -1:
             self._load_description()
-        # Optional DB API Extension: execute's return value is unspecified.  We
-        # return an iterable over the rows, but this isn't portable across DBs.
         return self
 
     def executemany(
